@@ -60,6 +60,363 @@ The framework follows a layered structure:
    - Cypress runtime, Cucumber integration, and reporting settings
    - Root files: `cypress.config.js`, `.cypress-cucumber-preprocessorrc.json`, `package.json`
 
+## Execution Flow
+
+This project does not implement a backend application or a stand-alone runtime service. It is a browser automation framework that drives a running web application. The execution flow is therefore: Cypress loads the framework, reads a `.feature` file, matches each Gherkin step to a JavaScript step definition, and then interacts with the application through selectors and assertions.
+
+### 1. Where execution starts
+
+Execution starts in the Cypress runtime, configured by `cypress.config.js`.
+
+The real startup flow is:
+
+1. Cypress loads `cypress.config.js`
+2. `setupNodeEvents` is registered
+3. The Cucumber preprocessor is initialized
+4. Allure reporting is attached
+5. Cypress scans the configured `specPattern` entries to find `.feature` files
+6. Each file is parsed and mapped to matching step definitions
+
+The root configuration sets the search pattern to include files like:
+
+- `cypress/e2e/features/**/*.feature`
+- `cypress/e2e/features/Admin/*.feature`
+- `cypress/e2e/features/Configuration/*.feature`
+- `cypress/e2e/features/Cad_Maker/*.feature`
+- `cypress/e2e/features/2nd_Release/*.feature`
+
+This is the first point where the project decides what will run.
+
+### 2. Which file/module is executed first
+
+The first executable unit is the feature file selected by Cypress from the `specPattern` list.
+
+Example:
+
+- `cypress/e2e/features/Cad_Maker/Limit_RF.feature`
+
+This file contains the scenario flow, including the `Background` and `Scenario` steps. The `Background` step is usually the first thing that runs before each scenario.
+
+In this project, a common pattern is:
+
+```gherkin
+Background: Open Website With Valid url
+    Given Open Browser and Visit Website
+```
+
+The actual implementation of `Open Browser and Visit Website` is not stored in a single application service; it is implemented in the step definition files under `cypress/e2e/step_definitions/` that match the same Gherkin text. This is how Cucumber links the feature file to the test logic.
+
+### 3. How execution moves from one layer to another
+
+The movement is controlled by the Cucumber preprocessor.
+
+- The feature file defines human-readable steps
+- `.cypress-cucumber-preprocessorrc.json` tells Cypress where step definitions live
+- Cypress matches the step text to the corresponding JavaScript implementation
+- The step definition then calls Cypress commands such as `cy.xpath(...)`, `.type()`, `.click()`, `.should()`, `.scrollIntoView()`
+- The locator file provides the exact selector used by that Cypress command
+- The data file provides the expected value or input value used by the assertion or interaction
+
+This is the real flow:
+
+```text
+Feature step
+  -> Cucumber step match
+  -> Step definition method
+  -> Locator file selector
+  -> Cypress UI action/assertion
+  -> Result recorded by Allure or the test runner
+```
+
+### 4. What each major file/module does during execution
+
+#### `cypress.config.js`
+
+Responsible for:
+
+- loading Cypress configuration
+- registering the Cucumber preprocessor
+- registering the Allure plugin
+- defining the feature file patterns
+- setting viewport, browser-level, and timeout behavior
+
+This file is not the application logic itself; it is the test runner bootstrap.
+
+#### `.cypress-cucumber-preprocessorrc.json`
+
+Responsible for:
+
+- telling the Cucumber preprocessor where to search for step definitions
+- enabling the mapping between `.feature` steps and JavaScript code
+
+Without this file, the feature steps would not be matched to implementation.
+
+#### `cypress/support/e2e.js`
+
+Responsible for:
+
+- importing support files
+- registering `cypress-file-upload`
+- registering the Allure plugin
+- running a final `after()` hook
+
+In this repo it is a framework-level setup file, not a business logic file.
+
+#### `cypress/support/commands.js`
+
+Responsible for:
+
+- adding reusable custom Cypress commands
+- formatting working dates for date-picker flows
+- preparing helper logic used by tests
+
+This file is not the app layer; it is a utility layer used by test steps.
+
+#### `cypress/data/data.js`
+
+Responsible for:
+
+- storing shared values like URLs, client data, and cross-module constants
+- centralizing common data for many scenarios
+
+This file acts as the shared configuration/data layer for the framework.
+
+#### `cypress/Locators/Cad_Maker/*.js`
+
+Responsible for:
+
+- storing XPath/CSS selectors for page elements
+- defining the exact UI targets used by steps
+
+Example from the repo:
+
+- `Limit_RF-locators.js`
+- `ODAccount = "//input[@data-testid='loanAccount']"`
+- `ModuleSelect = "//select[@title='Select Module']"`
+- `SupplierCreditLimit = "//input[contains(@data-testid,'supplierCreditLimit')]"`
+
+These selectors are then consumed by step definitions through `locator.*` references.
+
+#### `cypress/e2e/step_definitions/.../*.js`
+
+Responsible for:
+
+- executing the behavior described in the feature file
+- interacting with the browser
+- checking UI state
+- asserting expected conditions
+- using locator definitions and data definitions
+
+Example from the repo:
+
+```javascript
+When('Select Module RF',  () => {
+    cy.xpath(locator.ModuleSelect)
+    .scrollIntoView()
+    .should('be.visible')
+    .select('reverse-factoring');
+});
+```
+
+This is where the actual action happens.
+
+#### `cypress/e2e/data/Cad_Maker/*.js`
+
+Responsible for:
+
+- defining expected values and test scenario data
+- storing module-specific inputs and result expectations
+
+Example:
+
+- `RF_Report_Limit.js`
+- exports `limitReportDataRF`
+- contains expected numbers and labels such as sanction limit, utilized limit, and report values
+
+This data is compared against the actual UI output in assertions.
+
+#### `*.feature` files
+
+Responsible for:
+
+- defining the flow as readable business behavior
+- describing the order of actions and validations
+
+Example flow from `Limit_RF.feature`:
+
+```gherkin
+When Enter Cad_Maker User ID
+Then Enter Cad_Maker Password
+When Click on Login
+Then Click on EOD OK
+When Select Module RF
+When Click on Limit
+Then Click on Create Limit
+```
+
+This is the user/business-facing sequence.
+
+### 5. How different components communicate with each other
+
+The communication pattern in this codebase is very explicit and hierarchical:
+
+- Feature files send business intent
+- Step definitions interpret that intent
+- Step definitions ask the locator layer for selectors
+- Step definitions act on the browser using Cypress commands
+- Step definitions read the data layer for expected values
+- The running app responds in the DOM
+- Cypress checks the DOM for assertions and reports pass/fail
+
+This is not a service-to-service call chain. It is a browser-driven workflow in which the code communicates with the application through the DOM and page state.
+
+### 6. How data flows through the system
+
+The data path is simple and clear:
+
+1. Static/global values are stored in `cypress/data/data.js`
+2. Feature scenarios express the required flow and user actions
+3. Step definitions use the flow to populate inputs, click elements, and navigate pages
+4. Data values may be hardcoded in the step definition or pulled from the module data file
+5. The UI receives those values and alters page state
+6. Assertions compare actual DOM text/value against expected data from `cypress/e2e/data/...`
+
+Example from the repo:
+
+- `RF_Report_Limit.js` contains expected values like:
+  - `sanctionLimit: "10,00,000.00"`
+  - `utilizedLimit: "0.00"`
+  - `availableLimit: "10,00,000.00"`
+- A step definition then reads that value and asserts it against a visible UI element
+
+This means the data moves like this:
+
+```text
+data file -> step definition -> DOM input/action -> application state -> DOM output -> assertion -> pass/fail result
+```
+
+### 7. Where business logic, validation, API calls, database operations, auth/authorization, and error handling take place
+
+This is important: in this codebase, the repository itself does not contain the application’s business logic, API layer, database layer, or auth service implementation.
+
+The actual project is a UI automation layer for an external application.
+
+What is present in this repo:
+
+- UI interaction logic in step definitions
+- selector logic in locator files
+- validation logic via Cypress assertions (`.should(...)`, `.and(...)`)
+- data-driven expected results in data files
+- browser-level workflow orchestration in feature files
+
+What is not present in this repo:
+
+- application backend business logic
+- server-side API implementations
+- database schema or repository code
+- authentication/authorization service code
+- custom error handling middleware on the server
+
+These are handled by the target web application itself, not by this automation repository. The automation repository simply checks whether the application behaves as expected in the browser.
+
+Therefore:
+
+- business validation is performed by the application and verified in the automation layer
+- API calls are made by the application under test, not by this repo directly
+- database operations happen in the external app, not in the test project
+- authentication/authorization are part of the application flow being automated
+- error handling in this repo is mostly through Cypress test failures and assertion messages
+
+### 8. What happens after each step and which component handles the next step
+
+After each step, the next action depends on the application state and the next Gherkin step.
+
+Example from `Limit_RF.feature`:
+
+```gherkin
+When Enter Cad_Maker User ID
+Then Enter Cad_Maker Password
+When Click on Login
+Then Click on EOD OK
+When Select Module RF
+```
+
+Execution sequence:
+
+1. Feature step `When Enter Cad_Maker User ID`
+   - Cucumber finds the step definition
+   - Step definition locates the `UserID` selector
+   - Cypress types the value into the UI
+   - Browser state updates
+
+2. Next feature step `Then Enter Cad_Maker Password`
+   - The same process repeats with a different locator and different input
+
+3. `When Click on Login`
+   - Step definition locates the login button and triggers click
+   - The app processes the login request
+   - The next page loads
+
+4. `Then Click on EOD OK`
+   - The step definition calls the selector for the relevant confirmation element
+   - The app continues to the next screen
+
+5. `When Select Module RF`
+   - The step definition selects the module from a dropdown
+   - The rest of the scenario continues from that page state
+
+There is no hidden queue or service bus here. The state transition is purely driven by the browser DOM and the next step in the feature file.
+
+### 9. End-to-end execution sequence (practical example)
+
+A practical flow in this repo is the RF Limit scenario.
+
+#### Example: `Limit_RF.feature`
+
+```gherkin
+Background: Open Website With Valid url
+    Given Open Browser and Visit Website
+
+Scenario: Verify that Create Limit RF with different bank
+    When Enter Cad_Maker User ID
+    Then Enter Cad_Maker Password
+    When Click on Login
+    Then Click on EOD OK
+    When Select Module RF
+    When Click on Limit
+    Then Click on Create Limit
+    When Reload the page
+    When Input RF Negative1 OD Account
+    Then Click on Tick Mark
+    Then Click on Successful OK
+```
+
+#### What happens in the actual runtime
+
+1. Cypress starts from `cypress.config.js`
+2. It finds the feature file from `specPattern`
+3. It matches each step to the corresponding definition in the step definition files
+4. The first step runs: `Open Browser and Visit Website`
+5. The browser opens the configured website from the shared data config
+6. The user ID step locates the login field using a selector from `Limit_RF-locators.js`
+7. Password is entered with the next step
+8. Login is clicked
+9. The app handles the login and loads the next page
+10. EOD confirmation is clicked
+11. The module is selected from the dropdown
+12. The limit page opens and the flow continues
+13. Inputs are entered into fields such as account number, financing rate, supplier details, etc.
+14. Assertions verify page state, validation messages, or expected data values
+15. The test passes or fails depending on whether the DOM matches the expected output
+
+This is the full browsing sequence: feature step → browser action → DOM state → next step → next UI action.
+
+### 10. Final execution model in one sentence
+
+The codebase executes in a strict browser-driven sequence: configuration bootstraps Cypress, feature files define the business flow, step definitions implement that flow, locator files identify the UI elements, data files provide runtime values and expected outputs, and the browser/application under test responds through DOM state and UI behavior while Cypress validates each result.
+
+This is the core execution model of the project and the correct mental model for understanding how the codebase works.
+
 ## Project Structure
 
 ```text
@@ -206,7 +563,7 @@ npm run allure:report
 
 ## Cucumber and Cypress Configuration
 
-### `cypress.config.js`
+### Cypress runtime configuration
 
 This file configures:
 
@@ -217,7 +574,7 @@ This file configures:
 - Allure integration
 - Cucumber preprocessor setup
 
-### `.cypress-cucumber-preprocessorrc.json`
+### Cucumber step-definition registration
 
 This file tells the Cucumber preprocessor where to look for step definition files so feature steps can be automatically matched.
 
@@ -289,7 +646,3 @@ This repository demonstrates a clean, scalable, and maintainable Cypress + Cucum
 - externalized test data
 - shared framework configuration
 - structured reporting and CI integration
-
-## License
-
-ISC
